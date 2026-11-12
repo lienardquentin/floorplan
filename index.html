@@ -53,8 +53,9 @@ ol.steps b { color: var(--ink); }
 #overlay .bottom .row > .btn { flex: 1 1 0; padding: 13px 8px; font-size: .95rem; }
 #overlay .add { padding: 20px; font-size: 1.15rem; }
 #overlay .add.waiting { opacity: .5; }
-#overlay .namebox { display: none; gap: 8px; }
-#overlay .namebox.on { display: flex; }
+#overlay .namebox { display: none; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+#overlay .namebox.on { display: grid; }
+#overlay .namebox .btn { padding: 11px 4px; font-size: .82rem; }
 #overlay input { flex: 1; min-width: 0; padding: 13px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
 .crosshair { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; border: 2px solid rgb(255 255 255 / .7); border-radius: 50%; }
 
@@ -155,7 +156,12 @@ ol.steps b { color: var(--ink); }
     <div class="crosshair"></div>
     <div class="top"><div class="hint" id="hint">Point at the floor and move slowly</div><div class="sub" id="sub"></div></div>
     <div class="bottom">
-      <div class="namebox" id="namebox"><input id="roomname" placeholder="Room name" maxlength="30" autocomplete="off"><button class="btn" id="savename" type="button">Save</button></div>
+      <div class="namebox" id="namebox" role="group" aria-label="Name this room">
+        <button type="button" class="btn secondary" data-name="Living room">Living room</button><button type="button" class="btn secondary" data-name="Kitchen">Kitchen</button>
+        <button type="button" class="btn secondary" data-name="Bedroom">Bedroom</button><button type="button" class="btn secondary" data-name="Bathroom">Bathroom</button>
+        <button type="button" class="btn secondary" data-name="Hallway">Hallway</button><button type="button" class="btn secondary" data-name="Office">Office</button>
+        <button type="button" class="btn secondary" data-name="Toilet">Toilet</button><button type="button" class="btn" data-name="Room">Other</button>
+      </div>
       <button class="btn add waiting" id="add" type="button">Add corner</button>
       <button class="btn secondary" id="skipalign" type="button" hidden>Looks right, carry on</button>
       <div class="row">
@@ -169,6 +175,6 @@ ol.steps b { color: var(--ink); }
 
   <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script type="module" src="floorplan.js?v=8"></script>
+  <script type="module" src="floorplan.js?v=9"></script>
 </body>
 </html>

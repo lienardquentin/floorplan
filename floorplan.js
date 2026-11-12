@@ -41,8 +41,9 @@ const at = new THREE.Vector3(), aim = new THREE.Vector3(), seen = new THREE.Vect
 const corner = (p) => ({ p, anchor: null });  // p: [x, z] on the floor; anchor: kept by ARCore, moves p when tracking corrects
 
 function setupThree() {
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // light on the phone: the lighter each frame, the steadier the camera's frame rate, and the better ARCore tracks
+  renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: "low-power" });
+  renderer.setPixelRatio(1);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
   renderer.domElement.style.display = "none";
@@ -53,7 +54,10 @@ function setupThree() {
   reticle.add(new THREE.Mesh(new THREE.RingGeometry(0.075, 0.1, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffb454 })));
   reticle.add(new THREE.Mesh(new THREE.CircleGeometry(0.012, 16).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff })));
   reticle.visible = false;
-  guide = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.06, gapSize: 0.04 }));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+  g.setAttribute("lineDistance", new THREE.BufferAttribute(new Float32Array(2), 1));
+  guide = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.06, gapSize: 0.04 }));
   guide.visible = false;
   group = new THREE.Group();
   scene.add(reticle, guide, group);
@@ -145,6 +149,13 @@ function snapAim() {
   }
 }
 
+let quality = [];
+function anchorsHeld(frame) {
+  // after a loss, ARCore still tracks the corners' anchors: the scan is still right, nothing to realign
+  const anchored = allCorners().filter((c) => c.anchor);
+  return anchored.length > 0 && anchored.every((c) => frame.trackedAnchors?.has(c.anchor));
+}
+
 function startRealign() {
   // tracking was lost (or ARCore restarted its map): the scan no longer sits on the room. The two corners placed last
   // are tapped again; their move gives the turn and shift that put every point back
@@ -182,13 +193,18 @@ function finishRealign() {
 
 function onFrame(_, frame) {
   if (!frame) return renderer.render(scene, camera);
-  const pose = frame.getViewerPose(xrRef);
-  tracking = !!pose && !pose.emulatedPosition;
-  if (!tracking) lostAt ??= performance.now();
-  else if (lostAt !== null) {  // back: a real loss (not a flicker) means the scan may have moved
-    if (performance.now() - lostAt > 700 && allCorners().length && !realign) startRealign();
-    lostAt = null;
-  }
+  const pose = frame.getViewerPose(xrRef), now = performance.now(), visible = session.visibilityState === "visible";
+  const good = !!pose && !pose.emulatedPosition;
+  quality.push(good ? 1 : 0); if (quality.length > 90) quality.shift();
+  if (good || !visible) {
+    if (good && lostAt !== null) {  // back after a while: only if the corners can't be trusted any more
+      const away = now - lostAt;
+      if (away > 2500 && allCorners().length && !realign && !anchorsHeld(frame)) startRealign();
+    }
+    if (good) lostAt = null;
+  } else lostAt ??= now;
+  tracking = good || (lostAt !== null && now - lostAt < 1500 && !!pose);  // ride out a short dip with the last good view
+  if (!good) { pending = null; }
   if (reanchor && frame.createAnchor) {
     reanchor = false;
     for (const k of new Set(allCorners())) frame.createAnchor(new XRRigidTransform({ x: k.p[0], y: floorY ?? 0, z: k.p[1] }), xrRef).then((a) => { k.anchor = a; }).catch(() => {});
@@ -202,7 +218,7 @@ function onFrame(_, frame) {
     if (Math.hypot(x - c.p[0], z - c.p[1]) > 0.01) { c.p = [x, z]; dirty = true; }
   }
   onFloor = false;
-  if (tracking) {
+  if (tracking && good) {
     findFloor(frame, pose.transform.position.y);
     if (floorY !== null && aimAtFloor(pose)) {
       snapAim();
@@ -214,15 +230,16 @@ function onFrame(_, frame) {
     }
   }
   reticle.visible = onFloor;
-  $("#add").classList.toggle("waiting", !onFloor);
-  $("#add").textContent = realign ? "Here's that corner" : snap === "close" ? "Close room" : doorMode ? "Add doorway side" : "Add corner";
+  setText("#add", realign ? "Here's that corner" : snap === "close" ? "Close room" : doorMode ? "Add doorway side" : "Add corner", !onFloor);
   if (pending && onFloor) addHere(frame);
   pending = null;
   const list = doorMode ? doorPts : current, last = list[list.length - 1];
   guide.visible = !!(onFloor && last);
   if (guide.visible) {
-    guide.geometry.setFromPoints([new THREE.Vector3(last.p[0], floorY + 0.006, last.p[1]), new THREE.Vector3(at.x, floorY + 0.006, at.z)]);
-    guide.computeLineDistances();
+    const pos = guide.geometry.attributes.position, dist = guide.geometry.attributes.lineDistance;  // updated in place
+    pos.setXYZ(0, last.p[0], floorY + 0.006, last.p[1]); pos.setXYZ(1, at.x, floorY + 0.006, at.z); pos.needsUpdate = true;
+    dist.setX(1, Math.hypot(at.x - last.p[0], at.z - last.p[1])); dist.needsUpdate = true;
+    guide.geometry.computeBoundingSphere();
     guide.material.color.set(snap === "square" ? 0x7dd38a : 0xffffff);
   }
   if (dirty) redraw();
@@ -233,7 +250,9 @@ function onFrame(_, frame) {
 function hint(last) {
   const n = live.rooms.length;
   let h, s = `${n} room${n === 1 ? "" : "s"} in this scan`;
+  const q = quality.length ? quality.reduce((a, b) => a + b, 0) / quality.length : 1;
   if (!tracking) { h = "Hold still: point at something with texture so tracking can recover"; s = "Tracking lost: adding is paused"; }
+  else if (onFloor === false && lostAt !== null) { h = "Hold on: slow down and keep some floor in view"; s = "Tracking limited"; }
   else if (realign && floorY === null) { h = "Tracking is back. Sweep the floor so it can be found again"; s = "Lining the scan back up"; }
   else if (realign) {
     const two = realign.targets.length >= 2;
@@ -249,8 +268,20 @@ function hint(last) {
   if (onFloor && last) s = `${Math.hypot(at.x - last.p[0], at.z - last.p[1]).toFixed(2)} m${snap === "square" ? " · square" : ""} · ${s}`;
   else if (tracking && floorY !== null) s = `Floor found${floorFromPlane ? "" : " (refining)"} · ${s}`;
   if (!realign && allCorners().length) s += anchorsOn ? " · anchored" : " · no anchors on this phone";
-  $("#hint").textContent = h;
-  $("#sub").textContent = s;
+  if (tracking && q < 0.85) s += " · tracking shaky: move slower, more light";
+  setText("#hint", h);
+  setText("#sub", s);
+}
+
+const shown = {};
+function setText(sel, text, waiting) {
+  // the overlay is redrawn only when something on it changes (a DOM change in AR costs the camera frames)
+  const key = text + (waiting === undefined ? "" : waiting);
+  if (shown[sel] === key) return;
+  shown[sel] = key;
+  const el = $(sel);
+  el.textContent = text;
+  if (waiting !== undefined) el.classList.toggle("waiting", waiting);
 }
 
 function addHere(frame) {
@@ -290,11 +321,16 @@ function requestAdd() {
 }
 
 function askName() {
-  if (current.length < 3) { $("#hint").textContent = "A room needs at least 3 corners"; return; }
+  // one tap from a list: typing would bring up the keyboard, which pauses AR and loses the tracking
+  if (current.length < 3) { setText("#hint", "A room needs at least 3 corners"); return; }
   $("#namebox").classList.add("on");
-  $("#roomname").value = "";
-  $("#roomname").placeholder = `Room ${fp.rooms.length + live.rooms.length + 1}`;
-  $("#roomname").focus();
+}
+function nameRoom(name) {
+  const same = [...fp.rooms, ...live.rooms].filter((r) => r.name === name || r.name.startsWith(name + " ")).length;
+  live.rooms.push({ name: same ? `${name} ${same + 1}` : name, corners: current });
+  current = [];
+  $("#namebox").classList.remove("on");
+  dirty = true;
 }
 
 async function startAR() {
@@ -310,11 +346,13 @@ async function startAR() {
   }
   floorY = null; floorFromPlane = false; floorSamples = []; current = []; doorPts = []; doorMode = false; pending = null;
   live = { rooms: [], doors: [] }; reticle.visible = false; seen.set(0, 0, 0);
-  lostAt = null; realign = null; anchorsOn = false; reanchor = false; $("#skipalign").hidden = true;
+  lostAt = null; realign = null; anchorsOn = false; reanchor = false; quality = []; $("#skipalign").hidden = true;
+  for (const k in shown) delete shown[k];
   renderer.xr.setReferenceSpaceType("local");
   await renderer.xr.setSession(session);
   xrRef = renderer.xr.getReferenceSpace();
-  xrRef.addEventListener?.("reset", () => { if (allCorners().length && !realign) startRealign(); });  // ARCore moved the origin
+  // ARCore moved its origin: anchored corners follow on their own; without anchors, the scan is lined up again by hand
+  xrRef.addEventListener?.("reset", () => { if (allCorners().length && !realign && !anchorsOn) startRealign(); });
   const viewer = await session.requestReferenceSpace("viewer");
   try { hitSource = await session.requestHitTestSource({ space: viewer, entityTypes: ["plane", "point"] }); }
   catch { hitSource = await session.requestHitTestSource({ space: viewer }); }
@@ -366,14 +404,7 @@ $("#skipalign").addEventListener("click", () => {  // the lines already sit on t
   if (floorY === null && floorSamples.length) floorY = median(floorSamples);
   dirty = true;
 });
-$("#savename").addEventListener("click", () => {
-  live.rooms.push({ name: $("#roomname").value.trim() || $("#roomname").placeholder, corners: current });
-  current = [];
-  $("#namebox").classList.remove("on");
-  $("#roomname").blur();
-  dirty = true;
-});
-$("#roomname").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#savename").click(); });
+document.querySelectorAll("#namebox [data-name]").forEach((b) => b.addEventListener("click", () => nameRoom(b.dataset.name)));
 $("#door").addEventListener("click", () => {
   doorMode = !doorMode; doorPts.forEach(forget); doorPts = [];
   $("#door").textContent = doorMode ? "Cancel door" : "Doorway";
