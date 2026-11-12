@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Floor Plan</title>
+<meta name="theme-color" content="#14181f">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* A drafting table at night: blueprint ink on dark paper, one warm accent for what you're doing now. Everything runs on
+   the phone: the scan, the plan and the PDF never leave it. */
+:root {
+  --bg: #14181f; --panel: #1c222c; --panel-2: #252c38; --ink: #eef2f7; --muted: #aab4c3; --faint: #7d8796;
+  --line: rgb(238 242 247 / .14); --blue: #7fb6ff; --accent: #ffb454; --good: #7dd38a; --bad: #ff8a7a;
+  --sans: "Archivo", "Segoe UI", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans); -webkit-tap-highlight-color: transparent; }
+button { font: inherit; }
+.screen { min-height: 100%; padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.screen[hidden] { display: none; }
+.wrap { max-width: 720px; margin: 0 auto; display: grid; gap: 18px; }
+h1 { font: 700 2.1rem/1.05 var(--sans); margin: 0; letter-spacing: -0.01em; }
+h2 { font: 700 1.2rem/1.2 var(--sans); margin: 0; }
+p { margin: 0; color: var(--muted); }
+.kicker { font: 500 .72rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--blue); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 10px; }
+ol.steps { margin: 0; padding-left: 20px; color: var(--muted); display: grid; gap: 6px; }
+ol.steps b { color: var(--ink); }
+.btn { appearance: none; border: 0; border-radius: 14px; padding: 14px 18px; background: var(--accent); color: #1a1205; font-weight: 700; cursor: pointer; }
+.btn.secondary { background: var(--panel-2); color: var(--ink); font-weight: 500; }
+.btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 500; }
+.btn:disabled { opacity: .4; }
+.btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.row > .btn { flex: 1 1 140px; }
+.note { font-size: .85rem; color: var(--faint); }
+.status { font: .85rem/1.4 var(--mono); color: var(--faint); }
+.status.bad { color: var(--bad); }
+
+/* AR overlay (drawn over the camera) */
+#overlay { position: fixed; inset: 0; pointer-events: none; display: none; font-family: var(--sans); }
+#overlay.on { display: block; }
+#overlay .top { position: absolute; top: 0; left: 0; right: 0; padding: max(14px, env(safe-area-inset-top)) 14px 10px; display: grid; gap: 6px;
+  background: linear-gradient(rgb(10 12 16 / .78), rgb(10 12 16 / 0)); }
+#overlay .hint { font-weight: 700; font-size: 1.05rem; text-shadow: 0 1px 3px #000; }
+#overlay .sub { font: .85rem var(--mono); color: #dfe6ee; text-shadow: 0 1px 3px #000; }
+#overlay .bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 12px max(16px, env(safe-area-inset-bottom)); display: grid; gap: 10px;
+  background: linear-gradient(rgb(10 12 16 / 0), rgb(10 12 16 / .82)); pointer-events: auto; }
+#overlay .bottom .row > .btn { flex: 1 1 0; padding: 13px 8px; font-size: .95rem; }
+#overlay .add { padding: 20px; font-size: 1.15rem; }
+#overlay .namebox { display: none; gap: 8px; }
+#overlay .namebox.on { display: flex; }
+#overlay input { flex: 1; min-width: 0; padding: 13px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
+.crosshair { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; border: 2px solid rgb(255 255 255 / .7); border-radius: 50%; }
+
+/* plan */
+.plan-box { background: #f7f4ec; border-radius: 14px; padding: 10px; }
+.plan-box svg { display: block; width: 100%; height: auto; }
+.rooms { display: grid; gap: 8px; }
+.room-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; background: var(--panel-2); border-radius: 12px; padding: 10px 12px; }
+.room-row input { min-width: 0; background: transparent; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); font: inherit; padding: 4px 0; }
+.room-row span { font: .85rem var(--mono); color: var(--muted); white-space: nowrap; }
+.room-row button { border: 0; background: none; color: var(--faint); font-size: 1.2rem; cursor: pointer; padding: 2px 6px; }
+.totals { font: .9rem var(--mono); color: var(--muted); }
+</style>
+</head>
+<body>
+  <!-- start -->
+  <section class="screen" id="start">
+    <div class="wrap">
+      <span class="kicker">Floor plan · on this phone only</span>
+      <h1>Scan your flat, get the plan</h1>
+      <p>Walk through your home and tap the corners of each room on the floor. You get a clean 2D plan with room areas and wall lengths, saved as a PDF. Nothing leaves this phone.</p>
+      <div class="card">
+        <h2>How it works</h2>
+        <ol class="steps">
+          <li><b>Point at the floor</b> and move the phone slowly until the ring appears on it.</li>
+          <li><b>Tap "Add corner"</b> at each corner of the room, where the wall meets the floor, going round in order.</li>
+          <li><b>Close the room</b> and name it. Walk to the next room and keep going: one session for the whole flat keeps the rooms lined up.</li>
+          <li><b>Mark doorways</b> by tapping both sides of each opening.</li>
+          <li><b>Finish</b> to see the plan, fix names, and save the PDF.</li>
+        </ol>
+      </div>
+      <div class="row">
+        <button class="btn" id="go" type="button" disabled>Checking AR…</button>
+        <button class="btn ghost" id="sample" type="button">See a sample plan</button>
+      </div>
+      <p class="status" id="support">Checking whether this phone can scan in AR…</p>
+      <p class="note" id="resume" hidden></p>
+      <p class="note">Works in Chrome on Android phones with Google Play Services for AR. Good light and slow movements give the best walls.</p>
+    </div>
+  </section>
+
+  <!-- plan -->
+  <section class="screen" id="planview" hidden>
+    <div class="wrap">
+      <span class="kicker">Your plan</span>
+      <h1 id="plan-title">Floor plan</h1>
+      <div class="plan-box"><svg id="plan" viewBox="0 0 100 70" role="img" aria-label="The scanned floor plan"></svg></div>
+      <p class="totals" id="totals"></p>
+      <div class="card">
+        <h2>Rooms</h2>
+        <div class="rooms" id="rooms"></div>
+        <p class="note">Tap a name to change it. Walls within 10° of square are straightened.</p>
+      </div>
+      <div class="row">
+        <button class="btn" id="pdf" type="button">Save PDF</button>
+        <button class="btn secondary" id="json" type="button">Save plan file</button>
+      </div>
+      <div class="row">
+        <button class="btn secondary" id="more" type="button">Scan more rooms</button>
+        <button class="btn ghost" id="restart" type="button">Start over</button>
+      </div>
+      <p class="status" id="plan-status"></p>
+    </div>
+  </section>
+
+  <!-- AR overlay -->
+  <div id="overlay">
+    <div class="crosshair"></div>
+    <div class="top"><div class="hint" id="hint">Point at the floor and move slowly</div><div class="sub" id="sub"></div></div>
+    <div class="bottom">
+      <div class="namebox" id="namebox"><input id="roomname" placeholder="Room name" maxlength="30" autocomplete="off"><button class="btn" id="savename" type="button">Save</button></div>
+      <button class="btn add" id="add" type="button" disabled>Add corner</button>
+      <div class="row">
+        <button class="btn secondary" id="undo" type="button">Undo</button>
+        <button class="btn secondary" id="close" type="button">Close room</button>
+        <button class="btn secondary" id="door" type="button">Doorway</button>
+        <button class="btn ghost" id="finish" type="button">Finish</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script type="module" src="floorplan.js"></script>
+</body>
+</html>
