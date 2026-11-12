@@ -13,7 +13,8 @@ Scan your home with your phone's camera and get a clean 2D floor plan as a PDF. 
 5. **Finish**: the plan appears with room areas and wall lengths.
 6. **Edit**:
    - **+ Door / + Window**: tap a wall exactly where it goes, as many per wall as you like; drag it along the wall; tap it to set its width, type (door, opening, window), hinge side and swing (in or out).
-   - **Walls**: tap one to type its exact length, make it **no wall** (open-plan), or add a corner in it for L-shapes.
+   - **Walls**: tap one to type its exact length, make it **no wall** (open-plan), **make it straight**, or add a corner in it for L-shapes.
+   - **Straighten**: a room's walls within 25° of square become exactly straight, with right-angled corners (deliberate diagonals are kept); or every room at once.
    - **Rooms**: drag to move (they snap to their neighbours), turn, rename, delete; drag or delete corners; **+ Room** draws one by hand.
    - Pan by dragging empty space, pinch or use the buttons to zoom. Every edit can be undone.
 7. **Save PDF** puts an A4 plan, at a standard scale, in your Downloads.

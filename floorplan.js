@@ -589,6 +589,42 @@ function deleteCorner(ri, k) {
   save(); showPlan();
 }
 
+function straightenRoom(ri, keep = false) {
+  // the room turned so its walls line up with the plan, then every wall within 25° of horizontal or vertical made
+  // exactly so (a wall more askew than that is taken for a real diagonal and left alone), then lined up with the
+  // walls of the rooms next to it
+  if (!keep) remember();
+  const r = fp.rooms[ri];
+  let c = 0, s = 0;
+  r.pts.forEach((a, i) => { const b = next(r, i), l = len(a, b), ang = Math.atan2(b[1] - a[1], b[0] - a[0]); c += l * Math.cos(4 * ang); s += l * Math.sin(4 * ang); });
+  const turn = -Math.atan2(s, c) / 4, mid = centre(r.pts);
+  r.pts = r.pts.map(([x, y]) => { const q = rot([x - mid[0], y - mid[1]], turn); return [q[0] + mid[0], q[1] + mid[1]]; });
+  for (let pass = 0; pass < 3; pass++) r.pts.forEach((a, i) => {
+    const b = next(r, i), ang = Math.abs(Math.atan2(b[1] - a[1], b[0] - a[0])) * 180 / Math.PI;
+    if (ang < 25 || ang > 155) { const y = (a[1] + b[1]) / 2; a[1] = b[1] = y; }
+    else if (Math.abs(ang - 90) < 25) { const x = (a[0] + b[0]) / 2; a[0] = b[0] = x; }
+  });
+  const others = fp.rooms.flatMap((o, j) => (j === ri ? [] : o.pts));  // onto a neighbour's wall line within 8 cm
+  for (const k of [0, 1]) r.pts.forEach((p) => {
+    const near = others.map((q) => q[k]).filter((v) => Math.abs(v - p[k]) < 0.08).sort((u, v) => Math.abs(u - p[k]) - Math.abs(v - p[k]))[0];
+    if (near !== undefined) { const old = p[k]; r.pts.forEach((q) => { if (Math.abs(q[k] - old) < 1e-9) q[k] = near; }); }
+  });
+  if (!keep) { save(); showPlan(); }
+}
+function straightenAll() {
+  remember();
+  fp.rooms.forEach((_, ri) => straightenRoom(ri, true));
+  save(); showPlan();
+  $("#plan-status").textContent = "Every room straightened. Undo if you'd rather have it as it was.";
+}
+function straightenWall(ri, ei) {
+  // just this wall, exactly horizontal or vertical (whichever it's closer to): its far end moves
+  remember();
+  const r = fp.rooms[ri], a = r.pts[ei], b = next(r, ei);
+  if (Math.abs(b[0] - a[0]) >= Math.abs(b[1] - a[1])) b[1] = a[1]; else b[0] = a[0];
+  save(); showPlan();
+}
+
 function turnRoom(ri) {
   remember();
   const r = fp.rooms[ri], c = centre(r.pts);
@@ -832,8 +868,10 @@ function panel() {
       box.append(number("wall-length", len(a, b).toFixed(2), "Length", (L) => setLength(ri, ei, L)));
       box.append(seg("What this wall is", [["wall", "Wall"], ["open", "No wall"]], isOpen(ri, ei) ? "open" : "wall", (k) => setOpen(ri, ei, k === "open")));
       const row = h("div", "row");
+      const askew = Math.min(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])) > 0.005;
       row.append(button("+ Door here", "secondary", () => addElement(ri, ei, 0.5, "door")), button("+ Window here", "secondary", () => addElement(ri, ei, 0.5, "window")),
                  button("Add a corner", "secondary", () => splitWall(ri, ei)));
+      if (askew) row.append(button("Make straight", "secondary", () => straightenWall(ri, ei)));
       box.append(row, h("p", "note", `${on ? `${on} door${on === 1 ? "" : "s"} or window${on === 1 ? "" : "s"} on this wall. ` : ""}Setting the length moves the far end (and the next corner, so right angles stay right). "No wall" applies to both rooms.`), done());
       return;
     }
@@ -848,12 +886,14 @@ function panel() {
     const name = h("input", "field"); name.id = "room-name"; name.value = r.name; name.setAttribute("aria-label", "Room name");
     name.addEventListener("change", () => { remember(); r.name = name.value.trim() || r.name; save(); showPlan(); });
     const row = h("div", "row");
-    row.append(button("Turn 90°", "secondary", () => turnRoom(ri)), button("Delete room", "ghost", () => deleteRoom(ri)), done());
+    row.append(button("Straighten walls", "secondary", () => straightenRoom(ri)), button("Turn 90°", "secondary", () => turnRoom(ri)),
+               button("Delete room", "ghost", () => deleteRoom(ri)), done());
     box.append(name, h("p", "note", `${area(r.pts).toFixed(1)} m². Drag the room to move it (it snaps to its neighbours). Drag an orange corner to reshape it, or tap it to delete it. Tap a wall to add a corner in it.`), row);
     return;
   }
   box.append(h("h2", "", "Edit the plan"),
     h("p", "", "Tap a room, a wall, a corner or a door to change it. + Door and + Window place them where you tap a wall; + Room draws one. Drag empty space to move around, pinch or use the buttons to zoom."));
+  if (fp.rooms.length) { const row = h("div", "row"); row.append(button("Straighten every room", "secondary", straightenAll)); box.append(row); }
 }
 
 const toPlan = (x, y) => {
