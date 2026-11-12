@@ -66,6 +66,18 @@ ol.steps b { color: var(--ink); }
 .room-row span { font: .85rem var(--mono); color: var(--muted); white-space: nowrap; }
 .room-row button { border: 0; background: none; color: var(--faint); font-size: 1.2rem; cursor: pointer; padding: 2px 6px; }
 .totals { font: .9rem var(--mono); color: var(--muted); }
+.row.between { justify-content: space-between; align-items: center; }
+.btn.small { padding: 8px 14px; flex: 0 0 auto; }
+.plan-box svg { touch-action: none; user-select: none; -webkit-user-select: none; }
+.field { width: 100%; min-width: 0; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); font: inherit; }
+.row.inline { flex-wrap: nowrap; align-items: center; }
+.row.inline .field { flex: 1 1 auto; width: auto; }
+.row.inline > .btn { flex: 0 0 auto; }
+.unit { font: .9rem var(--mono); color: var(--muted); flex: 0 0 auto; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--panel-2); border-radius: 12px; padding: 4px; gap: 4px; }
+.seg button { border: 0; border-radius: 9px; padding: 11px 6px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #1a1205; font-weight: 700; }
+.seg button:focus-visible, .field:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -100,13 +112,9 @@ ol.steps b { color: var(--ink); }
     <div class="wrap">
       <span class="kicker">Your plan</span>
       <h1 id="plan-title">Floor plan</h1>
-      <div class="plan-box"><svg id="plan" viewBox="0 0 100 70" role="img" aria-label="The scanned floor plan"></svg></div>
-      <p class="totals" id="totals"></p>
-      <div class="card">
-        <h2>Rooms</h2>
-        <div class="rooms" id="rooms"></div>
-        <p class="note">Tap a name to change it. Walls within 10° of square are straightened.</p>
-      </div>
+      <div class="plan-box"><svg id="plan" viewBox="0 0 100 70" role="img" aria-label="The scanned floor plan: tap a room or a wall to edit it"></svg></div>
+      <div class="row between"><p class="totals" id="totals"></p><button class="btn ghost small" id="undo-edit" type="button" disabled>Undo</button></div>
+      <div class="card" id="edit" aria-live="polite"></div>
       <div class="row">
         <button class="btn" id="pdf" type="button">Save PDF</button>
         <button class="btn secondary" id="json" type="button">Save plan file</button>
