@@ -52,6 +52,7 @@ ol.steps b { color: var(--ink); }
   background: linear-gradient(rgb(10 12 16 / 0), rgb(10 12 16 / .82)); pointer-events: auto; }
 #overlay .bottom .row > .btn { flex: 1 1 0; padding: 13px 8px; font-size: .95rem; }
 #overlay .add { padding: 20px; font-size: 1.15rem; }
+#overlay .add.waiting { opacity: .5; }
 #overlay .namebox { display: none; gap: 8px; }
 #overlay .namebox.on { display: flex; }
 #overlay input { flex: 1; min-width: 0; padding: 13px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
@@ -133,7 +134,7 @@ ol.steps b { color: var(--ink); }
     <div class="top"><div class="hint" id="hint">Point at the floor and move slowly</div><div class="sub" id="sub"></div></div>
     <div class="bottom">
       <div class="namebox" id="namebox"><input id="roomname" placeholder="Room name" maxlength="30" autocomplete="off"><button class="btn" id="savename" type="button">Save</button></div>
-      <button class="btn add" id="add" type="button" disabled>Add corner</button>
+      <button class="btn add waiting" id="add" type="button">Add corner</button>
       <div class="row">
         <button class="btn secondary" id="undo" type="button">Undo</button>
         <button class="btn secondary" id="close" type="button">Close room</button>
@@ -145,6 +146,6 @@ ol.steps b { color: var(--ink); }
 
   <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script type="module" src="floorplan.js"></script>
+  <script type="module" src="floorplan.js?v=3"></script>
 </body>
 </html>

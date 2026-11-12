@@ -9,7 +9,7 @@ const KEY = "floorplan-v2";
 // rooms: [{name, pts: [[x, y], ...], open: [edge indices with no wall]}] in metres, squared up; doors: [{room, edge, t,
 // w}]: on that room's wall, centred at t (0 to 1 along it), w metres wide. A scan is cleaned up once, when it ends, and
 // added to the plan; from then on the plan is what's edited.
-let fp = load();
+let fp = { rooms: [], doors: [] };  // loaded at the end of this file, once everything it needs is defined
 
 function load() {
   try {
@@ -93,7 +93,7 @@ function onFrame(_, frame) {
     }
   }
   reticle.visible = onFloor;
-  $("#add").disabled = !onFloor;
+  $("#add").classList.toggle("waiting", !onFloor);
   const last = doorMode ? doorPts[doorPts.length - 1] : current[current.length - 1];
   scene.remove(preview);
   if (onFloor && last && floorY !== null) {
@@ -146,11 +146,25 @@ async function startAR() {
   });
 }
 
+// anything that goes wrong is shown, in the AR view and on the page, rather than failing silently
+const showError = (msg) => {
+  const text = `Something went wrong: ${msg}`;
+  if ($("#overlay").classList.contains("on")) $("#sub").textContent = text;
+  const st = $("#support"); if (st) { st.textContent = text; st.classList.add("bad"); }
+  const ps = $("#plan-status"); if (ps) ps.textContent = text;
+};
+window.addEventListener("error", (e) => showError(e.message || e.error));
+window.addEventListener("unhandledrejection", (e) => showError(e.reason?.message || e.reason));
+
 // the overlay's buttons must not also count as taps in the AR scene
 $("#overlay").addEventListener("beforexrselect", (e) => e.preventDefault());
 
 $("#add").addEventListener("click", () => {
-  if (!onFloor) return;
+  if (!onFloor) {  // never silent: say why nothing was added
+    $("#hint").textContent = "The ring isn't on the floor yet: aim lower and move the phone slowly";
+    navigator.vibrate?.([10, 60, 10]);
+    return;
+  }
   if (floorY === null) floorY = at.y;
   const p = [at.x, at.z];
   if (doorMode) {
@@ -670,6 +684,7 @@ $("#pdf").addEventListener("click", savePDF);
 $("#json").addEventListener("click", saveJSON);
 window.addEventListener("resize", () => { if (!$("#planview").hidden && fp.rooms.length) render(); });
 
+fp = load();
 if (location.hash === "#sample") sample();  // a link straight to the sample plan
 
 (async () => {
