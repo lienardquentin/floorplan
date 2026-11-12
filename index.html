@@ -135,6 +135,7 @@ ol.steps b { color: var(--ink); }
     <div class="bottom">
       <div class="namebox" id="namebox"><input id="roomname" placeholder="Room name" maxlength="30" autocomplete="off"><button class="btn" id="savename" type="button">Save</button></div>
       <button class="btn add waiting" id="add" type="button">Add corner</button>
+      <button class="btn secondary" id="skipalign" type="button" hidden>Looks right, carry on</button>
       <div class="row">
         <button class="btn secondary" id="undo" type="button">Undo</button>
         <button class="btn secondary" id="close" type="button">Close room</button>
@@ -146,6 +147,6 @@ ol.steps b { color: var(--ink); }
 
   <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script type="module" src="floorplan.js?v=4"></script>
+  <script type="module" src="floorplan.js?v=5"></script>
 </body>
 </html>

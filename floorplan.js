@@ -35,6 +35,7 @@ function save() {
 let renderer, scene, camera, reticle, guide, group, hitSource = null, session = null, xrRef = null;
 let floorY = null, floorFromPlane = false, floorSamples = [], tracking = false, onFloor = false;
 let doorMode = false, doorPts = [], current = [], pending = null, snap = null, dirty = false;
+let lostAt = null, realign = null, anchorsOn = false, reanchor = false;  // realign: after tracking was lost, {targets, taps}
 let live = { rooms: [], doors: [] };  // this scan's rooms (corners) and doorways, in the AR session's own frame
 const at = new THREE.Vector3(), aim = new THREE.Vector3(), seen = new THREE.Vector3(), q = new THREE.Quaternion(), fwd = new THREE.Vector3();
 const corner = (p) => ({ p, anchor: null });  // p: [x, z] on the floor; anchor: kept by ARCore, moves p when tracking corrects
@@ -82,6 +83,7 @@ function redraw() {
     current.forEach((c, i) => group.add(dot(c.p, i === 0 && current.length >= 3 ? 0xffffff : 0xffb454, i === 0 ? 0.045 : 0.035)));
   }
   doorPts.forEach((c) => group.add(dot(c.p, 0x7dd38a)));
+  if (realign) realign.targets.forEach((c, i) => { if (i >= realign.taps.length) group.add(dot(c.p, 0xff5fd2, 0.06)); });
 }
 
 const allCorners = () => [...live.rooms.flatMap((r) => r.corners), ...live.doors.flatMap((d) => [d.a, d.b]), ...current, ...doorPts];
@@ -90,7 +92,7 @@ const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[Math.
 function findFloor(frame, camY) {
   // the floor's height: horizontal planes when ARCore has found one, feature points well below the phone until then;
   // refined until the first corner is placed, then kept (the anchors take care of the rest)
-  if (!hitSource || allCorners().length) return;
+  if (!hitSource || (allCorners().length && !realign && floorY !== null)) return;
   for (const hit of frame.getHitTestResults(hitSource)) {
     const m = hit.getPose(xrRef)?.transform.matrix;
     if (!m) continue;
@@ -122,6 +124,7 @@ function snapAim() {
   // close to the room's first corner: onto it (and the button closes the room); otherwise, within 10° of square to the
   // last wall: onto the exact right angle or straight line, with a guide
   snap = null;
+  if (realign) return;
   if (!doorMode && current.length >= 3 && Math.hypot(aim.x - current[0].p[0], aim.z - current[0].p[1]) < 0.25) {
     aim.x = current[0].p[0]; aim.z = current[0].p[1]; snap = "close"; return;
   }
@@ -142,12 +145,56 @@ function snapAim() {
   }
 }
 
+function startRealign() {
+  // tracking was lost (or ARCore restarted its map): the scan no longer sits on the room. The two corners placed last
+  // are tapped again; their move gives the turn and shift that put every point back
+  const placed = [...current, ...(live.rooms.length ? live.rooms.at(-1).corners : [])];
+  const targets = current.length >= 2 ? [current.at(-1), current.at(-2)] : placed.slice(-2).reverse();
+  if (!targets.length) return;
+  realign = { targets, taps: [] };
+  floorY = null; floorFromPlane = false; floorSamples = [];  // the floor's height may have changed with the new map
+  $("#skipalign").hidden = false;
+  navigator.vibrate?.([30, 50, 30]);
+  dirty = true;
+}
+
+function finishRealign() {
+  const { targets, taps } = realign;
+  let turn = 0;
+  if (targets.length >= 2 && taps.length >= 2) {
+    turn = Math.atan2(taps[1][1] - taps[0][1], taps[1][0] - taps[0][0]) - Math.atan2(targets[1].p[1] - targets[0].p[1], targets[1].p[0] - targets[0].p[0]);
+  }
+  const o = targets[0].p, n = taps[0], c = Math.cos(turn), sn = Math.sin(turn);
+  const fresh = new Set();
+  for (const k of allCorners()) {
+    if (fresh.has(k)) continue;  // a corner shared by two lists is moved once
+    fresh.add(k);
+    const dx = k.p[0] - o[0], dz = k.p[1] - o[1];
+    k.p = [n[0] + dx * c - dz * sn, n[1] + dx * sn + dz * c];
+    try { k.anchor?.delete(); } catch { /* gone with the old map */ }
+    k.anchor = null;
+  }
+  realign = null; reanchor = true;  // anchored again in the next frame, in the new map
+  $("#skipalign").hidden = true;
+  navigator.vibrate?.([15, 40, 15]);
+  dirty = true;
+}
+
 function onFrame(_, frame) {
   if (!frame) return renderer.render(scene, camera);
   const pose = frame.getViewerPose(xrRef);
   tracking = !!pose && !pose.emulatedPosition;
+  if (!tracking) lostAt ??= performance.now();
+  else if (lostAt !== null) {  // back: a real loss (not a flicker) means the scan may have moved
+    if (performance.now() - lostAt > 700 && allCorners().length && !realign) startRealign();
+    lostAt = null;
+  }
+  if (reanchor && frame.createAnchor) {
+    reanchor = false;
+    for (const k of new Set(allCorners())) frame.createAnchor(new XRRigidTransform({ x: k.p[0], y: floorY ?? 0, z: k.p[1] }), xrRef).then((a) => { k.anchor = a; }).catch(() => {});
+  }
   // the anchors: where ARCore now puts each corner
-  if (frame.trackedAnchors) for (const c of allCorners()) {
+  if (frame.trackedAnchors && !realign) for (const c of allCorners()) {
     if (!c.anchor || !frame.trackedAnchors.has(c.anchor)) continue;
     const ap = frame.getPose(c.anchor.anchorSpace, xrRef);
     if (!ap) continue;
@@ -168,7 +215,7 @@ function onFrame(_, frame) {
   }
   reticle.visible = onFloor;
   $("#add").classList.toggle("waiting", !onFloor);
-  $("#add").textContent = snap === "close" ? "Close room" : doorMode ? "Add doorway side" : "Add corner";
+  $("#add").textContent = realign ? "Here's that corner" : snap === "close" ? "Close room" : doorMode ? "Add doorway side" : "Add corner";
   if (pending && onFloor) addHere(frame);
   pending = null;
   const list = doorMode ? doorPts : current, last = list[list.length - 1];
@@ -187,6 +234,12 @@ function hint(last) {
   const n = live.rooms.length;
   let h, s = `${n} room${n === 1 ? "" : "s"} in this scan`;
   if (!tracking) { h = "Hold still: point at something with texture so tracking can recover"; s = "Tracking lost: adding is paused"; }
+  else if (realign && floorY === null) { h = "Tracking is back. Sweep the floor so it can be found again"; s = "Lining the scan back up"; }
+  else if (realign) {
+    const two = realign.targets.length >= 2;
+    h = realign.taps.length === 0 ? `Tap the pink corner again${two ? " (the last one you placed)" : ""}, on the real corner` : "Now the second pink corner, on the real corner";
+    s = "Lining the scan back up · or Looks right if the lines already sit on the room";
+  }
   else if (floorY === null) { h = "Sweep the phone slowly over the floor"; s = "Looking for the floor…"; }
   else if (!onFloor) h = "Aim lower: the ring sits where the centre of the screen meets the floor";
   else if (doorMode) h = doorPts.length ? "Now the other side of the doorway" : "Tap one side of the doorway";
@@ -195,14 +248,21 @@ function hint(last) {
   else h = current.length < 3 ? "Next corner, going round the room" : "Next corner, or back to the first to close";
   if (onFloor && last) s = `${Math.hypot(at.x - last.p[0], at.z - last.p[1]).toFixed(2)} m${snap === "square" ? " · square" : ""} · ${s}`;
   else if (tracking && floorY !== null) s = `Floor found${floorFromPlane ? "" : " (refining)"} · ${s}`;
+  if (!realign && allCorners().length) s += anchorsOn ? " · anchored" : " · no anchors on this phone";
   $("#hint").textContent = h;
   $("#sub").textContent = s;
 }
 
 function addHere(frame) {
+  if (realign) {  // a realigning tap, not a new corner
+    realign.taps.push([at.x, at.z]);
+    navigator.vibrate?.(15);
+    if (realign.taps.length >= Math.min(2, realign.targets.length)) finishRealign();
+    return;
+  }
   // a corner where the ring is, anchored in the world when the phone supports anchors
   const c = corner([at.x, at.z]);
-  frame.createAnchor?.(new XRRigidTransform({ x: at.x, y: floorY, z: at.z }), xrRef)?.then((a) => { c.anchor = a; }).catch(() => {});
+  frame.createAnchor?.(new XRRigidTransform({ x: at.x, y: floorY, z: at.z }), xrRef)?.then((a) => { c.anchor = a; anchorsOn = true; }).catch(() => {});
   navigator.vibrate?.(snap === "close" ? [15, 40, 15] : 15);
   if (doorMode) {
     doorPts.push(c);
@@ -250,9 +310,11 @@ async function startAR() {
   }
   floorY = null; floorFromPlane = false; floorSamples = []; current = []; doorPts = []; doorMode = false; pending = null;
   live = { rooms: [], doors: [] }; reticle.visible = false; seen.set(0, 0, 0);
+  lostAt = null; realign = null; anchorsOn = false; reanchor = false; $("#skipalign").hidden = true;
   renderer.xr.setReferenceSpaceType("local");
   await renderer.xr.setSession(session);
   xrRef = renderer.xr.getReferenceSpace();
+  xrRef.addEventListener?.("reset", () => { if (allCorners().length && !realign) startRealign(); });  // ARCore moved the origin
   const viewer = await session.requestReferenceSpace("viewer");
   try { hitSource = await session.requestHitTestSource({ space: viewer, entityTypes: ["plane", "point"] }); }
   catch { hitSource = await session.requestHitTestSource({ space: viewer }); }
@@ -299,6 +361,11 @@ $("#undo").addEventListener("click", () => {
   dirty = true;
 });
 $("#close").addEventListener("click", askName);
+$("#skipalign").addEventListener("click", () => {  // the lines already sit on the room: carry on as they are
+  realign = null; $("#skipalign").hidden = true;
+  if (floorY === null && floorSamples.length) floorY = median(floorSamples);
+  dirty = true;
+});
 $("#savename").addEventListener("click", () => {
   live.rooms.push({ name: $("#roomname").value.trim() || $("#roomname").placeholder, corners: current });
   current = [];
