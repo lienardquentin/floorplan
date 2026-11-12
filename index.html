@@ -59,7 +59,12 @@ ol.steps b { color: var(--ink); }
 .crosshair { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; border: 2px solid rgb(255 255 255 / .7); border-radius: 50%; }
 
 /* plan */
-.plan-box { background: #f7f4ec; border-radius: 14px; padding: 10px; }
+.plan-box { background: #f7f4ec; border-radius: 14px; padding: 10px; position: relative; }
+.zoom { position: absolute; bottom: 8px; right: 8px; display: flex; gap: 6px; }
+.zoom button { width: 38px; height: 38px; border-radius: 10px; border: 1px solid rgb(29 37 51 / .15); background: rgb(255 255 255 / .92); color: #1d2533; font: 700 1.05rem var(--sans); cursor: pointer; }
+.zoom button#fit { font-size: .78rem; }
+.zoom button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.toolbar button:disabled { opacity: .4; }
 .plan-box svg { display: block; width: 100%; height: auto; }
 .rooms { display: grid; gap: 8px; }
 .room-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; background: var(--panel-2); border-radius: 12px; padding: 10px 12px; }
@@ -75,6 +80,12 @@ ol.steps b { color: var(--ink); }
 .row.inline .field { flex: 1 1 auto; width: auto; }
 .row.inline > .btn { flex: 0 0 auto; }
 .unit { font: .9rem var(--mono); color: var(--muted); flex: 0 0 auto; }
+.unit.label { min-width: 52px; font-family: var(--sans); color: var(--ink); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding: 6px 0; }
+.toolbar button { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 10px; padding: 9px 8px; font: 500 .86rem var(--sans); cursor: pointer; min-width: 40px; }
+.toolbar button[aria-pressed="true"] { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 700; }
+.toolbar button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.toolbar .spacer { flex: 1 1 0; }
 .seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--panel-2); border-radius: 12px; padding: 4px; gap: 4px; }
 .seg button { border: 0; border-radius: 9px; padding: 11px 6px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; }
 .seg button[aria-pressed="true"] { background: var(--accent); color: #1a1205; font-weight: 700; }
@@ -113,8 +124,19 @@ ol.steps b { color: var(--ink); }
     <div class="wrap">
       <span class="kicker">Your plan</span>
       <h1 id="plan-title">Floor plan</h1>
-      <div class="plan-box"><svg id="plan" viewBox="0 0 100 70" role="img" aria-label="The scanned floor plan: tap a room or a wall to edit it"></svg></div>
-      <div class="row between"><p class="totals" id="totals"></p><button class="btn ghost small" id="undo-edit" type="button" disabled>Undo</button></div>
+      <div class="toolbar" id="tools" role="toolbar" aria-label="Plan tools">
+        <button type="button" data-tool="select" aria-pressed="true">Select</button>
+        <button type="button" data-tool="door" aria-pressed="false">+ Door</button>
+        <button type="button" data-tool="window" aria-pressed="false">+ Window</button>
+        <button type="button" data-tool="room" aria-pressed="false">+ Room</button>
+        <span class="spacer"></span>
+        <button type="button" id="undo-edit" aria-label="Undo" disabled>Undo</button>
+      </div>
+      <div class="plan-box">
+        <svg id="plan" viewBox="0 0 100 70" role="img" aria-label="The scanned floor plan: tap a room or a wall to edit it"></svg>
+        <div class="zoom"><button type="button" id="zoom-in" aria-label="Zoom in">+</button><button type="button" id="zoom-out" aria-label="Zoom out">−</button><button type="button" id="fit" aria-label="Fit the whole plan">Fit</button></div>
+      </div>
+      <p class="totals" id="totals"></p>
       <div class="card" id="edit" aria-live="polite"></div>
       <div class="row">
         <button class="btn" id="pdf" type="button">Save PDF</button>
@@ -147,6 +169,6 @@ ol.steps b { color: var(--ink); }
 
   <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script type="module" src="floorplan.js?v=5"></script>
+  <script type="module" src="floorplan.js?v=8"></script>
 </body>
 </html>

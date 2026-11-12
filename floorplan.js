@@ -332,7 +332,7 @@ async function startAR() {
     current = []; doorPts = [];
     const rooms = live.rooms.map((r) => ({ name: r.name, pts: r.corners.map((c) => c.p) }));
     const doors = live.doors.map((d) => ({ a: d.a.p, b: d.b.p }));
-    if (rooms.length) { remember(); add(fp, rooms, doors); save(); }
+    if (rooms.length) { remember(); add(fp, rooms, doors); save(); view = null; }
     showPlan();
   });
 }
@@ -462,21 +462,25 @@ function onWall(plan, pa, pb, from = 0) {
       if (!best || dist < best.dist) best = { dist, room: ri, edge: i, t: (ta + tb) / 2, w: Math.abs(tb - ta) * Math.sqrt(l2) };
     });
   });
-  return best && best.dist < 1.2 && best.w > 0.4 ? { room: best.room, edge: best.edge, t: +best.t.toFixed(3), w: +best.w.toFixed(2) } : null;
+  return best && best.dist < 1.2 && best.w > 0.4 ? { room: best.room, edge: best.edge, t: +best.t.toFixed(3), w: +best.w.toFixed(2), type: "door", hinge: 0, swing: 1 } : null;
 }
 
 // ---------- editing the plan ----------
-let history = [], sel = null;  // sel: {room} or {room, edge}
+// What's selected: {room}, {room, edge}, {room, corner} or {door}. Tools: "select", "door", "window", "room".
+let history = [], sel = null, tool = "select";
+const DOOR_W = { door: 0.83, opening: 0.9, window: 1.2 };
 
 function remember() {
   history.push(JSON.stringify(fp));
-  if (history.length > 60) history.shift();
+  if (history.length > 80) history.shift();
 }
 function undoEdit() {
   if (!history.length) return;
   fp = JSON.parse(history.pop());
   sel = null; save(); showPlan();
 }
+const elements = () => fp.doors;  // doors, openings and windows: {room, edge, t, w, type, hinge (0 start, 1 end), swing (1 in, -1 out)}
+const fixElement = (d) => ({ type: "door", hinge: 0, swing: 1, ...d });
 
 function sameWall(r1, e1, r2, e2) {
   // two rooms' walls that are the same wall seen from both sides: both straight, on one line (within 6 cm), overlapping
@@ -492,28 +496,17 @@ function twins(ri, ei) {
   fp.rooms.forEach((r, rj) => { if (rj !== ri) r.pts.forEach((_, ej) => { if (sameWall(ri, ei, rj, ej)) out.push([rj, ej]); }); });
   return out;
 }
+const isOpen = (ri, ei) => twins(ri, ei).some(([rj, ej]) => (fp.rooms[rj].open || []).includes(ej));
 
-function setKind(ri, ei, kind, width) {
-  // a wall, no wall (open, on both rooms' sides), or a doorway (one per wall, centred unless already placed)
+function setOpen(ri, ei, open) {
+  // no wall here (open-plan), on both rooms' sides of a shared wall
   remember();
   for (const [rj, ej] of twins(ri, ei)) {
     const r = fp.rooms[rj];
     r.open = (r.open || []).filter((e) => e !== ej);
-    if (kind === "open") r.open.push(ej);
-    if (kind !== "door") fp.doors = fp.doors.filter((d) => !(d.room === rj && d.edge === ej));
-  }
-  if (kind === "door") {
-    const wall = len(fp.rooms[ri].pts[ei], next(fp.rooms[ri], ei));
-    const d = fp.doors.find((d) => twins(ri, ei).some(([rj, ej]) => d.room === rj && d.edge === ej));
-    const w = Math.max(0.5, Math.min(width || d?.w || 0.83, wall - 0.1));
-    if (d) d.w = +w.toFixed(2); else fp.doors.push({ room: ri, edge: ei, t: 0.5, w: +w.toFixed(2) });
+    if (open) r.open.push(ej);
   }
   save(); showPlan();
-}
-function kindOf(ri, ei) {
-  const tw = twins(ri, ei);
-  if (fp.doors.some((d) => tw.some(([rj, ej]) => d.room === rj && d.edge === ej))) return "door";
-  return tw.some(([rj, ej]) => (fp.rooms[rj].open || []).includes(ej)) ? "open" : "wall";
 }
 
 function setLength(ri, ei, L) {
@@ -526,6 +519,42 @@ function setLength(ri, ei, L) {
   const c = r.pts[(ei + 2) % n], bc = [c[0] - b[0], c[1] - b[1]];
   if (n > 3 && Math.abs(bc[0] * ux + bc[1] * uy) < 0.05 * len(b, c)) moving.push((ei + 2) % n);  // the next wall is square to it
   for (const k of moving) { r.pts[k][0] += ux * d; r.pts[k][1] += uy * d; }
+  // what's on the wall keeps its distance from the wall's start
+  for (const e of elements()) if (e.room === ri && e.edge === ei) e.t = Math.min(1 - e.w / 2 / L, Math.max(e.w / 2 / L, e.t * l / L));
+  save(); showPlan();
+}
+
+function splitWall(ri, ei) {
+  // a corner in the middle of the wall, to make an L-shape or an alcove (drag it afterwards)
+  remember();
+  const r = fp.rooms[ri], a = r.pts[ei], b = next(r, ei);
+  r.pts.splice(ei + 1, 0, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+  r.open = (r.open || []).flatMap((e) => (e < ei ? [e] : e === ei ? [ei, ei + 1] : [e + 1]));
+  for (const d of elements()) if (d.room === ri) {
+    if (d.edge > ei) d.edge += 1;
+    else if (d.edge === ei) { if (d.t < 0.5) d.t *= 2; else { d.edge = ei + 1; d.t = (d.t - 0.5) * 2; } }
+  }
+  sel = { room: ri, corner: ei + 1 };
+  save(); showPlan();
+}
+
+function deleteCorner(ri, k) {
+  // the corner goes; its two walls become one, and what was on them moves onto it
+  const r = fp.rooms[ri], n = r.pts.length;
+  if (n <= 3) { $("#plan-status").textContent = "A room needs at least 3 corners."; return; }
+  remember();
+  const prev = (k - 1 + n) % n, gone = r.pts[k], merged = (pt) => {  // where a point on the old walls lands on the new one
+    const a = r.pts[prev], b = r.pts[(k + 1) % n], vx = b[0] - a[0], vy = b[1] - a[1], l2 = vx * vx + vy * vy || 1e-9;
+    return Math.max(0, Math.min(1, ((pt[0] - a[0]) * vx + (pt[1] - a[1]) * vy) / l2));
+  };
+  const at = (e, t) => { const a = r.pts[e], b = next(r, e); return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; };
+  for (const d of elements()) if (d.room === ri && (d.edge === prev || d.edge === k)) { d.t = merged(at(d.edge, d.t)); d.edge = prev; }
+  r.pts.splice(k, 1);
+  const fixEdge = (e) => (e > k ? e - 1 : e === k ? (prev > k ? prev - 1 : prev) : e);
+  for (const d of elements()) if (d.room === ri) d.edge = fixEdge(d.edge);
+  r.open = [...new Set((r.open || []).filter((e) => e !== k).map(fixEdge))];
+  void gone;
+  sel = { room: ri };
   save(); showPlan();
 }
 
@@ -538,9 +567,35 @@ function turnRoom(ri) {
 function deleteRoom(ri) {
   remember();
   fp.rooms.splice(ri, 1);
-  fp.doors = fp.doors.filter((d) => d.room !== ri).map((d) => ({ ...d, room: d.room > ri ? d.room - 1 : d.room }));
+  fp.doors = elements().filter((d) => d.room !== ri).map((d) => ({ ...d, room: d.room > ri ? d.room - 1 : d.room }));
   sel = null; save(); showPlan();
 }
+function addRoom(a, b) {
+  const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+  if (x1 - x0 < 0.5 || y1 - y0 < 0.5) return false;
+  remember();
+  fp.rooms.push({ name: `Room ${fp.rooms.length + 1}`, pts: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], open: [] });
+  sel = { room: fp.rooms.length - 1 };
+  save(); return true;
+}
+
+function addElement(ri, ei, t, type) {
+  const r = fp.rooms[ri], l = len(r.pts[ei], next(r, ei)), w = Math.min(DOOR_W[type], l - 0.1);
+  if (w < 0.3) { $("#plan-status").textContent = "That wall is too short for it."; return; }
+  remember();
+  fp.doors.push({ room: ri, edge: ei, t: Math.min(1 - w / 2 / l, Math.max(w / 2 / l, t)), w: +w.toFixed(2), type, hinge: 0, swing: 1 });
+  sel = { door: fp.doors.length - 1 };
+  save(); showPlan();
+}
+function editElement(i, change) {
+  remember();
+  const d = fp.doors[i], r = fp.rooms[d.room], l = len(r.pts[d.edge], next(r, d.edge));
+  Object.assign(d, change);
+  d.w = +Math.max(0.3, Math.min(d.w, l - 0.05)).toFixed(2);
+  d.t = Math.min(1 - d.w / 2 / l, Math.max(d.w / 2 / l, d.t));
+  save(); showPlan();
+}
+function deleteElement(i) { remember(); fp.doors.splice(i, 1); sel = null; save(); showPlan(); }
 
 function snapMove(ri, dx, dy) {
   // a room being dragged clicks onto other rooms: a corner within 15 cm of another room's line on either axis lines up
@@ -552,31 +607,45 @@ function snapMove(ri, dx, dy) {
   };
   return [fix(0, dx), fix(1, dy)];
 }
-function snapPoint(ri, p) {
+function snapPoint(ri, k, p) {
   // a dragged corner: onto another corner's line within 10 cm, else onto a 5 cm grid
-  const others = fp.rooms.flatMap((r, j) => r.pts.filter((_, k) => !(j === ri && sel && sel.corner === k)));
-  return [0, 1].map((k) => {
+  const others = fp.rooms.flatMap((r, j) => r.pts.filter((_, m) => !(j === ri && m === k)));
+  return [0, 1].map((ax) => {
     let best = null;
-    for (const q of others) { const gap = q[k] - p[k]; if (Math.abs(gap) < 0.1 && (best === null || Math.abs(gap) < Math.abs(best))) best = gap; }
-    return best === null ? Math.round(p[k] / 0.05) * 0.05 : p[k] + best;
+    for (const q of others) { const gap = q[ax] - p[ax]; if (Math.abs(gap) < 0.1 && (best === null || Math.abs(gap) < Math.abs(best))) best = gap; }
+    return best === null ? Math.round(p[ax] / 0.05) * 0.05 : p[ax] + best;
   });
 }
+const tOn = (r, e, p) => {  // how far along wall e a point falls, 0 to 1
+  const a = r.pts[e], b = next(r, e), vx = b[0] - a[0], vy = b[1] - a[1];
+  return Math.max(0, Math.min(1, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / (vx * vx + vy * vy || 1e-9)));
+};
 
 // ---------- the drawing, once, for the screen (SVG) and the PDF: primitives in metres ----------
+function elementShape(d, i) {
+  // a door: the gap, its leaf from the hinge (into or out of the room) and the swing's arc; an opening: the gap with two
+  // jambs; a window: the gap with the glass's three thin lines
+  const r = fp.rooms[d.room];
+  if (!r || !r.pts[d.edge]) return null;
+  const a = r.pts[d.edge], b = next(r, d.edge), l = len(a, b) || 1, ux = (b[0] - a[0]) / l, uy = (b[1] - a[1]) / l;
+  const mid = [a[0] + (b[0] - a[0]) * d.t, a[1] + (b[1] - a[1]) * d.t], h = Math.min(d.w, l) / 2;
+  const p = [mid[0] - ux * h, mid[1] - uy * h], q = [mid[0] + ux * h, mid[1] + uy * h], n0 = inward(r, d.edge);
+  const shape = { kind: d.type || "door", i, a: p, b: q, mid, u: [ux, uy], n: n0 };
+  if (shape.kind === "door") {
+    const n = [n0[0] * (d.swing || 1), n0[1] * (d.swing || 1)], w = 2 * h;
+    const hinge = d.hinge ? q : p, towards = d.hinge ? [-ux, -uy] : [ux, uy];
+    const arc = [];
+    for (let k = 0; k <= 14; k++) { const t = (k / 14) * Math.PI / 2; arc.push([hinge[0] + w * (towards[0] * Math.cos(t) + n[0] * Math.sin(t)), hinge[1] + w * (towards[1] * Math.cos(t) + n[1] * Math.sin(t))]); }
+    shape.hinge = hinge; shape.arc = arc; shape.leaf = [hinge, arc.at(-1)];
+  }
+  return shape;
+}
+
 function drawing() {
   const out = [];
   fp.rooms.forEach((r, ri) => out.push({ kind: "fill", pts: r.pts, room: ri }));
-  fp.rooms.forEach((r, ri) => r.pts.forEach((a, ei) => out.push({ kind: "wall", a, b: next(r, ei), room: ri, edge: ei, open: kindOf(ri, ei) === "open" })));
-  for (const d of fp.doors) {
-    const r = fp.rooms[d.room];
-    if (!r || !r.pts[d.edge]) continue;
-    const a = r.pts[d.edge], b = next(r, d.edge), l = len(a, b) || 1, ux = (b[0] - a[0]) / l, uy = (b[1] - a[1]) / l;
-    const mid = [a[0] + (b[0] - a[0]) * d.t, a[1] + (b[1] - a[1]) * d.t], h = Math.min(d.w, l) / 2;
-    const p = [mid[0] - ux * h, mid[1] - uy * h], q = [mid[0] + ux * h, mid[1] + uy * h], n = inward(r, d.edge), w = 2 * h;
-    const arc = [];  // the door's swing, a quarter circle into the room from its hinge
-    for (let k = 0; k <= 12; k++) { const t = (k / 12) * Math.PI / 2; arc.push([p[0] + w * (ux * Math.cos(t) + n[0] * Math.sin(t)), p[1] + w * (uy * Math.cos(t) + n[1] * Math.sin(t))]); }
-    out.push({ kind: "door", a: p, b: q, arc });
-  }
+  fp.rooms.forEach((r, ri) => r.pts.forEach((a, ei) => out.push({ kind: "wall", a, b: next(r, ei), room: ri, edge: ei, open: isOpen(ri, ei) })));
+  elements().forEach((d, i) => { const s = elementShape(fixElement(d), i); if (s) out.push(s); });
   fp.rooms.forEach((r) => {
     const c = centre(r.pts);
     r.pts.forEach((a, i) => {
@@ -594,125 +663,198 @@ function drawing() {
 // ---------- the plan on screen ----------
 const svg = $("#plan");
 let view = null, drag = null;
+const pointers = new Map();
 
 function frameView() {
   const b = bounds(fp.rooms), pad = 0.8;
   view = { x: b.x0 - pad, y: b.y0 - pad, w: b.x1 - b.x0 + 2 * pad, h: b.y1 - b.y0 + 2 * pad + 0.6 };
 }
+function zoom(f, about) {
+  const c = about || [view.x + view.w / 2, view.y + view.h / 2];
+  const w = Math.min(60, Math.max(1.5, view.w * f)), k = w / view.w;
+  view = { x: c[0] - (c[0] - view.x) * k, y: c[1] - (c[1] - view.y) * k, w, h: view.h * k };
+  render();
+}
 
 function showPlan() {
   document.querySelectorAll(".screen").forEach((s) => (s.hidden = s.id !== "planview"));
-  if (!fp.rooms.length) {
-    svg.setAttribute("viewBox", "0 0 400 120");
-    svg.innerHTML = '<text x="200" y="66" text-anchor="middle" font-size="16" fill="#6b6455" font-family="Archivo, sans-serif">No rooms yet: scan one to see it here.</text>';
-    $("#totals").textContent = ""; panel(); return;
-  }
-  if (!drag) frameView();
+  fp.doors = elements().map(fixElement);
+  if (!fp.rooms.length && tool !== "room") {
+    if (!view) view = { x: 0, y: 0, w: 6, h: 4 };
+  } else if (!view) frameView();
   render();
-  const total = fp.rooms.reduce((s, r) => s + area(r.pts), 0);
-  $("#totals").textContent = `${fp.rooms.length} room${fp.rooms.length === 1 ? "" : "s"} · ${total.toFixed(1)} m² in all · ${fp.doors.length} doorway${fp.doors.length === 1 ? "" : "s"}`;
+  const total = fp.rooms.reduce((s, r) => s + area(r.pts), 0), nd = fp.doors.filter((d) => d.type !== "window").length, nw = fp.doors.length - nd;
+  $("#totals").textContent = fp.rooms.length ? `${fp.rooms.length} room${fp.rooms.length === 1 ? "" : "s"} · ${total.toFixed(1)} m² · ${nd} door${nd === 1 ? "" : "s"}${nw ? ` · ${nw} window${nw === 1 ? "" : "s"}` : ""}` : "No rooms yet";
   $("#undo-edit").disabled = !history.length;
+  document.querySelectorAll("#tools [data-tool]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.tool === tool));
   panel();
 }
 
 function render() {
   const S = 100;  // drawn in centimetres
   svg.setAttribute("viewBox", `${view.x * S} ${view.y * S} ${view.w * S} ${view.h * S}`);
-  const px = (svg.getBoundingClientRect().width || 360) / (view.w * S);  // screen pixels per unit, for handle sizes
+  const px = (svg.getBoundingClientRect().width || 360) / (view.w * S);  // screen pixels per unit, for touch sizes
   const P = (pt) => `${(pt[0] * S).toFixed(1)},${(pt[1] * S).toFixed(1)}`;
-  const parts = [];
+  const L = (a, b, extra) => `<line x1="${a[0] * S}" y1="${a[1] * S}" x2="${b[0] * S}" y2="${b[1] * S}" ${extra}/>`;
+  const out = [], hits = [];
+  const placing = tool === "door" || tool === "window";
   for (const s of drawing()) {
-    const isSel = sel && sel.room === s.room;
-    if (s.kind === "fill") parts.push(`<polygon points="${s.pts.map(P).join(" ")}" fill="${isSel && sel.edge === undefined ? "#e6f0ff" : "#ffffff"}" data-room="${s.room}"/>`);
+    const roomSel = sel && sel.room === s.room && sel.edge === undefined && sel.corner === undefined;
+    if (s.kind === "fill") out.push(`<polygon points="${s.pts.map(P).join(" ")}" fill="${roomSel ? "#e6f0ff" : "#ffffff"}" data-room="${s.room}"/>`);
     else if (s.kind === "wall") {
       const chosen = sel && sel.room === s.room && sel.edge === s.edge;
-      parts.push(s.open
-        ? `<line x1="${s.a[0] * S}" y1="${s.a[1] * S}" x2="${s.b[0] * S}" y2="${s.b[1] * S}" stroke="${chosen ? "#ff9d2e" : "#b9b0a0"}" stroke-width="${chosen ? 6 : 3}" stroke-dasharray="10 8"/>`
-        : `<line x1="${s.a[0] * S}" y1="${s.a[1] * S}" x2="${s.b[0] * S}" y2="${s.b[1] * S}" stroke="${chosen ? "#ff9d2e" : "#1d2533"}" stroke-width="9" stroke-linecap="square"/>`);
-      // the wall's touch zone: about a fingertip on screen, never more than a third of the room's narrowest side
+      out.push(s.open ? L(s.a, s.b, `stroke="${chosen ? "#ff9d2e" : "#b9b0a0"}" stroke-width="${chosen ? 6 : 3}" stroke-dasharray="10 8"`)
+                      : L(s.a, s.b, `stroke="${chosen ? "#ff9d2e" : "#1d2533"}" stroke-width="9" stroke-linecap="square"`));
       const r = fp.rooms[s.room], bb = bounds([r]), most = Math.min(bb.x1 - bb.x0, bb.y1 - bb.y0) * S / 3;
-      parts.push(`<line x1="${s.a[0] * S}" y1="${s.a[1] * S}" x2="${s.b[0] * S}" y2="${s.b[1] * S}" stroke="transparent" stroke-width="${Math.min(18 / px, most)}" data-room="${s.room}" data-edge="${s.edge}" style="cursor:pointer"/>`);
-    } else if (s.kind === "door") {
-      parts.push(`<line x1="${s.a[0] * S}" y1="${s.a[1] * S}" x2="${s.b[0] * S}" y2="${s.b[1] * S}" stroke="#ffffff" stroke-width="12" pointer-events="none"/>`);
-      parts.push(`<polyline points="${s.arc.map(P).join(" ")}" fill="none" stroke="#9aa3b1" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"/>`);
-      parts.push(`<line x1="${s.a[0] * S}" y1="${s.a[1] * S}" x2="${s.arc.at(-1)[0] * S}" y2="${s.arc.at(-1)[1] * S}" stroke="#9aa3b1" stroke-width="3" pointer-events="none"/>`);
+      hits.push(L(s.a, s.b, `stroke="transparent" stroke-width="${Math.min((placing ? 30 : 18) / px, most)}" data-room="${s.room}" data-edge="${s.edge}" style="cursor:${placing ? "copy" : "pointer"}"`));
+    } else if (["door", "opening", "window"].includes(s.kind)) {
+      const chosen = sel && sel.door === s.i, ink = chosen ? "#ff9d2e" : "#8b94a3";
+      out.push(L(s.a, s.b, `stroke="#ffffff" stroke-width="12"`));
+      if (s.kind === "door") {
+        out.push(`<polyline points="${s.arc.map(P).join(" ")}" fill="none" stroke="${ink}" stroke-width="2" stroke-dasharray="6 4"/>`);
+        out.push(L(s.leaf[0], s.leaf[1], `stroke="${ink}" stroke-width="3.5"`));
+      } else if (s.kind === "opening") {
+        for (const e of [s.a, s.b]) out.push(L([e[0] - s.n[0] * 0.07, e[1] - s.n[1] * 0.07], [e[0] + s.n[0] * 0.07, e[1] + s.n[1] * 0.07], `stroke="${chosen ? ink : "#1d2533"}" stroke-width="3"`));
+      } else {
+        for (const o of [-0.045, 0, 0.045]) out.push(L([s.a[0] + s.n[0] * o, s.a[1] + s.n[1] * o], [s.b[0] + s.n[0] * o, s.b[1] + s.n[1] * o], `stroke="${chosen ? ink : "#4b84c4"}" stroke-width="${o ? 2 : 1.5}"`));
+      }
+      hits.push(L(s.a, s.b, `stroke="transparent" stroke-width="${Math.max(24 / px, 20)}" stroke-linecap="round" data-door="${s.i}" style="cursor:grab"`));
+      if (chosen) hits.push(`<circle cx="${s.mid[0] * S}" cy="${s.mid[1] * S}" r="${Math.max(9, 10 / px)}" fill="#ff9d2e" stroke="#fff" stroke-width="${3 / px}" data-door="${s.i}" style="cursor:grab"/>`);
     } else if (s.kind === "length") {
       const deg = (s.angle * 180 / Math.PI + 360) % 180, up = deg > 90 ? deg - 180 : deg;
-      parts.push(`<text transform="translate(${s.at[0] * S} ${s.at[1] * S}) rotate(${up})" text-anchor="middle" dominant-baseline="middle" font-size="14" fill="#7a6f5a" font-family="IBM Plex Mono, monospace" pointer-events="none">${s.text}</text>`);
+      out.push(`<text transform="translate(${s.at[0] * S} ${s.at[1] * S}) rotate(${up})" text-anchor="middle" dominant-baseline="middle" font-size="14" fill="#7a6f5a" font-family="IBM Plex Mono, monospace" pointer-events="none">${s.text}</text>`);
     } else if (s.kind === "name") {
-      parts.push(`<text x="${s.at[0] * S}" y="${s.at[1] * S - 6}" text-anchor="middle" font-size="22" font-weight="700" fill="#1d2533" font-family="Archivo, sans-serif" pointer-events="none">${esc(s.name)}</text>`);
-      parts.push(`<text x="${s.at[0] * S}" y="${s.at[1] * S + 20}" text-anchor="middle" font-size="17" fill="#5d6675" font-family="IBM Plex Mono, monospace" pointer-events="none">${s.area.toFixed(1)} m²</text>`);
+      out.push(`<text x="${s.at[0] * S}" y="${s.at[1] * S - 6}" text-anchor="middle" font-size="22" font-weight="700" fill="#1d2533" font-family="Archivo, sans-serif" pointer-events="none">${esc(s.name)}</text>`);
+      out.push(`<text x="${s.at[0] * S}" y="${s.at[1] * S + 20}" text-anchor="middle" font-size="17" fill="#5d6675" font-family="IBM Plex Mono, monospace" pointer-events="none">${s.area.toFixed(1)} m²</text>`);
     }
   }
-  if (sel && sel.edge === undefined && fp.rooms[sel.room]) {  // the selected room's corners, to drag
-    const r = Math.max(9, 11 / px);
-    fp.rooms[sel.room].pts.forEach((p, k) => parts.push(`<circle cx="${p[0] * S}" cy="${p[1] * S}" r="${r}" fill="#ff9d2e" stroke="#ffffff" stroke-width="${3 / px}" data-room="${sel.room}" data-corner="${k}" style="cursor:grab"/>`));
+  if (sel && sel.room !== undefined && sel.edge === undefined && fp.rooms[sel.room]) {  // the room's corners, to drag or tap
+    fp.rooms[sel.room].pts.forEach((p, k) => {
+      const on = sel.corner === k;
+      hits.push(`<circle cx="${p[0] * S}" cy="${p[1] * S}" r="${Math.max(9, (on ? 13 : 11) / px)}" fill="${on ? "#ffffff" : "#ff9d2e"}" stroke="${on ? "#ff9d2e" : "#ffffff"}" stroke-width="${3 / px}" data-room="${sel.room}" data-corner="${k}" style="cursor:grab"/>`);
+    });
   }
-  const bx = view.x * S + 40, by = (view.y + view.h) * S - 30;  // a 1 m scale bar under the plan
-  parts.push(`<g font-family="IBM Plex Mono, monospace" font-size="15" fill="#5d6675" pointer-events="none"><rect x="${bx}" y="${by}" width="100" height="8" fill="#1d2533"/><text x="${bx + 112}" y="${by + 9}">1 m</text></g>`);
-  svg.innerHTML = parts.join("");
+  if (drag && drag.kind === "newroom" && drag.end) {
+    const a = drag.start, b = drag.end, x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
+    out.push(`<rect x="${x * S}" y="${y * S}" width="${Math.abs(b[0] - a[0]) * S}" height="${Math.abs(b[1] - a[1]) * S}" fill="rgba(255,157,46,.12)" stroke="#ff9d2e" stroke-width="${2 / px}" stroke-dasharray="${8 / px} ${6 / px}"/>`);
+    out.push(`<text x="${(x + Math.abs(b[0] - a[0]) / 2) * S}" y="${(y + Math.abs(b[1] - a[1]) / 2) * S}" text-anchor="middle" font-size="${14 / px}" fill="#b0600c" font-family="IBM Plex Mono, monospace">${Math.abs(b[0] - a[0]).toFixed(2)} × ${Math.abs(b[1] - a[1]).toFixed(2)} m</text>`);
+  }
+  const bx = view.x * S + 30 / px, by = (view.y + view.h) * S - 30 / px;  // a 1 m scale bar, bottom left of the view
+  out.push(`<g pointer-events="none" font-family="IBM Plex Mono, monospace" font-size="${13 / px}" fill="#5d6675"><rect x="${bx}" y="${by}" width="100" height="${6 / px}" fill="#1d2533"/><text x="${bx + 100 + 8 / px}" y="${by + 6 / px}">1 m</text></g>`);
+  svg.innerHTML = out.join("") + hits.join("");
 }
 
 function panel() {
   const box = $("#edit");
   box.replaceChildren();
   const h = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
-  if (!sel || !fp.rooms[sel.room]) {
-    box.append(h("h2", "", "Edit the plan"), h("p", "", "Tap a room to move it (it snaps to the rooms around it), turn or rename it, and drag its corners. Tap a wall to set its exact length, or make it open or a doorway."));
+  const button = (label, cls, fn) => { const b = h("button", `btn ${cls}`, label); b.type = "button"; b.onclick = fn; return b; };
+  const done = () => button("Done", "secondary", () => { sel = null; showPlan(); });
+  const number = (id, value, label, onSet) => {
+    const row = h("div", "row inline"), f = h("input", "field");
+    f.id = id; f.type = "number"; f.step = "0.01"; f.min = "0.1"; f.inputMode = "decimal"; f.value = value; f.setAttribute("aria-label", label);
+    const set = button("Set", "secondary", () => onSet(parseFloat(f.value)));
+    f.addEventListener("keydown", (e) => { if (e.key === "Enter") set.click(); });
+    row.append(h("span", "unit label", label), f, h("span", "unit", "m"), set);
+    return row;
+  };
+  const seg = (label, options, current, onPick) => {
+    const g = h("div", "seg"); g.setAttribute("role", "group"); g.setAttribute("aria-label", label);
+    g.style.gridTemplateColumns = `repeat(${options.length}, 1fr)`;
+    for (const [value, text] of options) { const b = h("button", "", text); b.type = "button"; b.setAttribute("aria-pressed", current === value); b.onclick = () => onPick(value); g.append(b); }
+    return g;
+  };
+
+  if (tool === "door" || tool === "window") {
+    box.append(h("h2", "", tool === "door" ? "Adding a door" : "Adding a window"),
+      h("p", "", `Tap a wall exactly where the ${tool} goes. Add as many as you like; then drag them along their wall and set them up.`),
+      button("Back to selecting", "secondary", () => { tool = "select"; showPlan(); }));
     return;
   }
-  const r = fp.rooms[sel.room];
-  if (sel.edge === undefined) {
+  if (tool === "room") {
+    box.append(h("h2", "", "Drawing a room"), h("p", "", "Drag a rectangle on an empty part of the plan. It snaps to the 5 cm grid; reshape it afterwards by its corners."),
+      button("Back to selecting", "secondary", () => { tool = "select"; showPlan(); }));
+    return;
+  }
+  if (sel && sel.door !== undefined && fp.doors[sel.door]) {
+    const i = sel.door, d = fp.doors[i], r = fp.rooms[d.room];
+    const names = { door: "Door", opening: "Opening", window: "Window" };
+    box.append(h("h2", "", `${names[d.type]} in ${r.name}`));
+    box.append(seg("Type", [["door", "Door"], ["opening", "Opening"], ["window", "Window"]], d.type, (type) => editElement(i, { type, w: d.type === type ? d.w : DOOR_W[type] })));
+    box.append(number("element-width", d.w.toFixed(2), "Width", (w) => editElement(i, { w })));
+    if (d.type === "door") {
+      const row = h("div", "row");
+      row.append(button("Flip hinge", "secondary", () => editElement(i, { hinge: d.hinge ? 0 : 1 })),
+                 button(d.swing === 1 ? "Swing out" : "Swing in", "secondary", () => editElement(i, { swing: -(d.swing || 1) })));
+      box.append(row, h("p", "note", `Opens ${d.swing === 1 ? "into" : "out of"} ${r.name}, hinged on its ${d.hinge ? "far" : "near"} side. Drag it along the wall to move it.`));
+    } else box.append(h("p", "note", "Drag it along the wall to move it."));
+    const row = h("div", "row");
+    row.append(button("Delete", "ghost", () => deleteElement(i)), done());
+    box.append(row);
+    return;
+  }
+  if (sel && sel.room !== undefined && fp.rooms[sel.room]) {
+    const ri = sel.room, r = fp.rooms[ri];
+    if (sel.edge !== undefined) {
+      const a = r.pts[sel.edge], b = next(r, sel.edge), ei = sel.edge, on = elements().filter((d) => d.room === ri && d.edge === ei).length;
+      box.append(h("h2", "", `Wall of ${r.name}`));
+      box.append(number("wall-length", len(a, b).toFixed(2), "Length", (L) => setLength(ri, ei, L)));
+      box.append(seg("What this wall is", [["wall", "Wall"], ["open", "No wall"]], isOpen(ri, ei) ? "open" : "wall", (k) => setOpen(ri, ei, k === "open")));
+      const row = h("div", "row");
+      row.append(button("+ Door here", "secondary", () => addElement(ri, ei, 0.5, "door")), button("+ Window here", "secondary", () => addElement(ri, ei, 0.5, "window")),
+                 button("Add a corner", "secondary", () => splitWall(ri, ei)));
+      box.append(row, h("p", "note", `${on ? `${on} door${on === 1 ? "" : "s"} or window${on === 1 ? "" : "s"} on this wall. ` : ""}Setting the length moves the far end (and the next corner, so right angles stay right). "No wall" applies to both rooms.`), done());
+      return;
+    }
+    if (sel.corner !== undefined) {
+      box.append(h("h2", "", `Corner of ${r.name}`), h("p", "", "Drag it to reshape the room; it snaps to other corners and a 5 cm grid."));
+      const row = h("div", "row");
+      row.append(button("Delete corner", "ghost", () => deleteCorner(ri, sel.corner)), button("Back to the room", "secondary", () => { sel = { room: ri }; showPlan(); }));
+      box.append(row);
+      return;
+    }
     box.append(h("h2", "", "Room"));
     const name = h("input", "field"); name.id = "room-name"; name.value = r.name; name.setAttribute("aria-label", "Room name");
     name.addEventListener("change", () => { remember(); r.name = name.value.trim() || r.name; save(); showPlan(); });
     const row = h("div", "row");
-    const turn = h("button", "btn secondary", "Turn 90°"); turn.type = "button"; turn.onclick = () => turnRoom(sel.room);
-    const del = h("button", "btn ghost", "Delete room"); del.type = "button"; del.onclick = () => deleteRoom(sel.room);
-    const done = h("button", "btn secondary", "Done"); done.type = "button"; done.onclick = () => { sel = null; showPlan(); };
-    row.append(turn, del, done);
-    box.append(name, h("p", "note", `${area(r.pts).toFixed(1)} m². Drag the room to move it; drag an orange corner to reshape it.`), row);
+    row.append(button("Turn 90°", "secondary", () => turnRoom(ri)), button("Delete room", "ghost", () => deleteRoom(ri)), done());
+    box.append(name, h("p", "note", `${area(r.pts).toFixed(1)} m². Drag the room to move it (it snaps to its neighbours). Drag an orange corner to reshape it, or tap it to delete it. Tap a wall to add a corner in it.`), row);
     return;
   }
-  const a = r.pts[sel.edge], b = next(r, sel.edge), kind = kindOf(sel.room, sel.edge);
-  box.append(h("h2", "", `Wall of ${r.name}`));
-  const lrow = h("div", "row inline");
-  const L = h("input", "field"); L.id = "wall-length"; L.type = "number"; L.step = "0.01"; L.min = "0.2"; L.inputMode = "decimal"; L.value = len(a, b).toFixed(2); L.setAttribute("aria-label", "Wall length in metres");
-  const setL = h("button", "btn secondary", "Set length"); setL.type = "button"; setL.onclick = () => setLength(sel.room, sel.edge, parseFloat(L.value));
-  L.addEventListener("keydown", (e) => { if (e.key === "Enter") setL.click(); });
-  lrow.append(L, h("span", "unit", "m"), setL);
-  const kinds = h("div", "seg"); kinds.setAttribute("role", "group"); kinds.setAttribute("aria-label", "What this wall is");
-  for (const [k, label] of [["wall", "Wall"], ["open", "No wall"], ["door", "Doorway"]]) {
-    const btn = h("button", "", label); btn.type = "button"; btn.setAttribute("aria-pressed", kind === k);
-    btn.onclick = () => setKind(sel.room, sel.edge, k);
-    kinds.append(btn);
-  }
-  box.append(lrow, kinds);
-  if (kind === "door") {
-    const d = fp.doors.find((d) => twins(sel.room, sel.edge).some(([rj, ej]) => d.room === rj && d.edge === ej));
-    const drow = h("div", "row inline");
-    const W = h("input", "field"); W.id = "door-width"; W.type = "number"; W.step = "0.01"; W.min = "0.5"; W.inputMode = "decimal"; W.value = d ? d.w.toFixed(2) : "0.83"; W.setAttribute("aria-label", "Doorway width in metres");
-    const setW = h("button", "btn secondary", "Set width"); setW.type = "button"; setW.onclick = () => setKind(sel.room, sel.edge, "door", parseFloat(W.value));
-    drow.append(h("span", "unit", "Doorway"), W, h("span", "unit", "m"), setW);
-    box.append(drow);
-  }
-  const done = h("button", "btn secondary", "Done"); done.type = "button"; done.onclick = () => { sel = null; showPlan(); };
-  box.append(h("p", "note", "Setting a length moves the wall's far end (and the next corner, so right angles stay right). \"No wall\" applies to both rooms."), done);
+  box.append(h("h2", "", "Edit the plan"),
+    h("p", "", "Tap a room, a wall, a corner or a door to change it. + Door and + Window place them where you tap a wall; + Room draws one. Drag empty space to move around, pinch or use the buttons to zoom."));
 }
 
-const toPlan = (e) => {
-  const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
+const toPlan = (x, y) => {
+  const p = svg.createSVGPoint(); p.x = x; p.y = y;
   const q = p.matrixTransform(svg.getScreenCTM().inverse());
   return [q.x / 100, q.y / 100];
 };
 
 svg.addEventListener("pointerdown", (e) => {
-  if (!fp.rooms.length) return;
-  const d = e.target.dataset || {}, p = toPlan(e);
-  if (d.corner !== undefined) {
-    remember();
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  svg.setPointerCapture(e.pointerId);
+  if (pointers.size === 2) {  // two fingers: pinch to zoom, move to pan (whatever one finger was doing stops)
+    const [a, b] = [...pointers.values()];
+    drag = { kind: "pinch", dist: Math.hypot(a[0] - b[0], a[1] - b[1]), mid: toPlan((a[0] + b[0]) / 2, (a[1] + b[1]) / 2), view: { ...view } };
+    return;
+  }
+  const d = e.target.dataset || {}, p = toPlan(e.clientX, e.clientY);
+  if ((tool === "door" || tool === "window") && d.edge !== undefined) {
+    const r = fp.rooms[+d.room];
+    addElement(+d.room, +d.edge, tOn(r, +d.edge, p), tool);
+    tool = "select"; showPlan(); drag = null; return;
+  }
+  if (tool === "room" && d.room === undefined && d.door === undefined) {
+    const g = (v) => Math.round(v / 0.05) * 0.05;
+    drag = { kind: "newroom", start: [g(p[0]), g(p[1])] }; return;
+  }
+  if (d.door !== undefined) {
+    sel = { door: +d.door };
+    drag = { kind: "door-maybe", i: +d.door, start: p };
+  } else if (d.corner !== undefined) {
     sel = { room: +d.room, corner: +d.corner };
-    drag = { kind: "corner", room: +d.room, k: +d.corner };
+    drag = { kind: "corner-maybe", room: +d.room, k: +d.corner, start: p };
   } else if (d.edge !== undefined) {
     sel = { room: +d.room, edge: +d.edge };
     drag = null;
@@ -720,36 +862,67 @@ svg.addEventListener("pointerdown", (e) => {
     sel = { room: +d.room };
     drag = { kind: "room-maybe", room: +d.room, start: p, orig: fp.rooms[+d.room].pts.map((q) => [...q]) };
   } else {
-    sel = null; drag = null;
+    sel = null;
+    drag = { kind: "pan", start: [e.clientX, e.clientY], view: { ...view } };
   }
-  svg.setPointerCapture(e.pointerId);
   showPlan();
 });
+
 svg.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
   if (!drag) return;
-  const p = toPlan(e);
-  if (drag.kind === "corner") {
-    fp.rooms[drag.room].pts[drag.k] = snapPoint(drag.room, p);
-    render();
-  } else if (drag.kind.startsWith("room")) {
+  if (drag.kind === "pinch") {
+    if (pointers.size < 2) return;
+    const [a, b] = [...pointers.values()], dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    view = { ...drag.view };
+    zoom(drag.dist / Math.max(dist, 1), drag.mid);
+    return;
+  }
+  if (drag.kind === "pan") {
+    const k = view.w / (svg.getBoundingClientRect().width || 1);
+    view = { ...drag.view, x: drag.view.x - (e.clientX - drag.start[0]) * k, y: drag.view.y - (e.clientY - drag.start[1]) * k };
+    render(); return;
+  }
+  const p = toPlan(e.clientX, e.clientY);
+  if (drag.kind === "newroom") { const g = (v) => Math.round(v / 0.05) * 0.05; drag.end = [g(p[0]), g(p[1])]; render(); return; }
+  if (drag.kind.endsWith("-maybe")) {  // a tap until the finger has moved 8 cm on the plan
+    if (Math.hypot(p[0] - drag.start[0], p[1] - drag.start[1]) < 0.08) return;
+    remember(); drag.kind = drag.kind.replace("-maybe", "");
+  }
+  if (drag.kind === "door") {
+    const d = fp.doors[drag.i], r = fp.rooms[d.room], l = len(r.pts[d.edge], next(r, d.edge));
+    d.t = Math.min(1 - d.w / 2 / l, Math.max(d.w / 2 / l, tOn(r, d.edge, p)));
+  } else if (drag.kind === "corner") {
+    fp.rooms[drag.room].pts[drag.k] = snapPoint(drag.room, drag.k, p);
+  } else if (drag.kind === "room") {
     let dx = p[0] - drag.start[0], dy = p[1] - drag.start[1];
-    if (drag.kind === "room-maybe") { if (Math.hypot(dx, dy) < 0.08) return; remember(); drag.kind = "room"; }
     fp.rooms[drag.room].pts = drag.orig.map((q) => [q[0], q[1]]);
     [dx, dy] = snapMove(drag.room, dx, dy);
     fp.rooms[drag.room].pts = drag.orig.map((q) => [q[0] + dx, q[1] + dy]);
-    render();
   }
+  render();
 });
-const endDrag = () => {
+
+const endPointer = (e) => {
+  pointers.delete(e.pointerId);
   if (!drag) return;
-  const moved = drag.kind === "corner" || drag.kind === "room";
-  if (drag.kind === "corner") sel = { room: drag.room };
+  if (drag.kind === "pinch") { if (pointers.size === 0) drag = null; return; }
+  const kind = drag.kind;
+  if (kind === "newroom") {
+    const made = drag.end && addRoom(drag.start, drag.end);
+    drag = null;
+    if (made) tool = "select";
+    else $("#plan-status").textContent = "Drag a bigger rectangle (at least 50 cm a side) to draw a room.";
+    showPlan(); return;
+  }
   drag = null;
-  if (moved) save();
+  if (["door", "corner", "room"].includes(kind)) save();
   showPlan();
 };
-svg.addEventListener("pointerup", endDrag);
-svg.addEventListener("pointercancel", endDrag);
+svg.addEventListener("pointerup", endPointer);
+svg.addEventListener("pointercancel", endPointer);
+svg.addEventListener("wheel", (e) => { e.preventDefault(); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12, toPlan(e.clientX, e.clientY)); }, { passive: false });
 
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -783,12 +956,21 @@ function savePDF() {
     doc.line(a[0], a[1], bb[0], bb[1]);
   }
   doc.setLineDashPattern([], 0); doc.setLineCap("butt");
-  for (const s of shapes.filter((s) => s.kind === "door")) {
+  for (const s of shapes.filter((s) => ["door", "opening", "window"].includes(s.kind))) {
     const a = X(s.a), bb = X(s.b);
     doc.setDrawColor(255, 255, 255); doc.setLineWidth(Math.max(0.9, 0.12 * k)); doc.line(a[0], a[1], bb[0], bb[1]);
-    doc.setDrawColor(154, 163, 177); doc.setLineWidth(0.25); doc.setLineDashPattern([1.2, 0.9], 0);
-    const arc = s.arc.map(X); for (let i = 1; i < arc.length; i++) doc.line(arc[i - 1][0], arc[i - 1][1], arc[i][0], arc[i][1]);
-    doc.setLineDashPattern([], 0); doc.setLineWidth(0.4); doc.line(a[0], a[1], arc.at(-1)[0], arc.at(-1)[1]);
+    if (s.kind === "door") {
+      doc.setDrawColor(139, 148, 163); doc.setLineWidth(0.25); doc.setLineDashPattern([1.2, 0.9], 0);
+      const arc = s.arc.map(X); for (let i = 1; i < arc.length; i++) doc.line(arc[i - 1][0], arc[i - 1][1], arc[i][0], arc[i][1]);
+      doc.setLineDashPattern([], 0); doc.setLineWidth(0.45);
+      const l0 = X(s.leaf[0]), l1 = X(s.leaf[1]); doc.line(l0[0], l0[1], l1[0], l1[1]);
+    } else if (s.kind === "opening") {
+      doc.setDrawColor(29, 37, 51); doc.setLineWidth(0.4);
+      for (const e of [s.a, s.b]) { const p0 = X([e[0] - s.n[0] * 0.07, e[1] - s.n[1] * 0.07]), p1 = X([e[0] + s.n[0] * 0.07, e[1] + s.n[1] * 0.07]); doc.line(p0[0], p0[1], p1[0], p1[1]); }
+    } else {
+      doc.setDrawColor(75, 132, 196);
+      for (const o of [-0.045, 0, 0.045]) { doc.setLineWidth(o ? 0.3 : 0.2); const p0 = X([s.a[0] + s.n[0] * o, s.a[1] + s.n[1] * o]), p1 = X([s.b[0] + s.n[0] * o, s.b[1] + s.n[1] * o]); doc.line(p0[0], p0[1], p1[0], p1[1]); }
+    }
   }
   for (const s of shapes.filter((s) => s.kind === "length")) {
     const at = X(s.at), deg = (s.angle * 180 / Math.PI + 360) % 180, up = deg > 90 ? deg - 180 : deg;
@@ -838,6 +1020,11 @@ function sample() {
   const kitchen = fp.rooms.findIndex((r) => r.name === "Kitchen"), living = fp.rooms.findIndex((r) => r.name === "Living room");
   const shared = fp.rooms[living].pts.findIndex((_, e) => fp.rooms[kitchen].pts.some((_, f) => sameWall(living, e, kitchen, f)));
   if (shared >= 0) { fp.rooms[living].open.push(shared); history = []; }  // open-plan: no wall between kitchen and living room
+  const top = (ri) => fp.rooms[ri].pts.findIndex((a, e) => { const b = next(fp.rooms[ri], e); return Math.abs(a[1] - b[1]) < 1e-6 && a[1] <= Math.min(...fp.rooms[ri].pts.map((p) => p[1])) + 1e-6; });
+  fp.doors.push({ room: living, edge: top(living), t: 0.5, w: 1.4, type: "window", hinge: 0, swing: 1 });
+  const bed = fp.rooms.findIndex((r) => r.name === "Bedroom");
+  fp.doors.push({ room: bed, edge: top(bed), t: 0.55, w: 1.1, type: "window", hinge: 0, swing: 1 });
+  view = null;
   showPlan();
   $("#plan-title").textContent = "Sample plan";
   $("#plan-status").textContent = "A made-up flat (the kitchen is open to the living room), to show what a scan gives. Start over to scan your own.";
@@ -848,13 +1035,17 @@ $("#sample").addEventListener("click", sample);
 $("#go").addEventListener("click", startAR);
 $("#more").addEventListener("click", () => { if (navigator.xr) startAR(); });
 $("#restart").addEventListener("click", () => {
-  remember(); fp = { rooms: [], doors: [] }; sel = null; save();
+  remember(); fp = { rooms: [], doors: [] }; sel = null; view = null; tool = "select"; save();
   document.querySelectorAll(".screen").forEach((s) => (s.hidden = s.id !== "start"));
 });
 $("#undo-edit").addEventListener("click", undoEdit);
 $("#pdf").addEventListener("click", savePDF);
 $("#json").addEventListener("click", saveJSON);
-window.addEventListener("resize", () => { if (!$("#planview").hidden && fp.rooms.length) render(); });
+window.addEventListener("resize", () => { if (!$("#planview").hidden && view) render(); });
+document.querySelectorAll("#tools [data-tool]").forEach((b) => b.addEventListener("click", () => { tool = tool === b.dataset.tool ? "select" : b.dataset.tool; sel = null; showPlan(); }));
+$("#zoom-in").addEventListener("click", () => zoom(1 / 1.3));
+$("#zoom-out").addEventListener("click", () => zoom(1.3));
+$("#fit").addEventListener("click", () => { frameView(); render(); });
 
 fp = load();
 if (location.hash === "#sample") sample();  // a link straight to the sample plan
